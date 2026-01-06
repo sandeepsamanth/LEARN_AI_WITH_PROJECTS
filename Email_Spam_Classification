@@ -1,0 +1,747 @@
+"""
+Comprehensive Comparison of Text Classification Methods for Spam Detection
+
+This script compares multiple text classification approaches:
+1. TF-IDF + Logistic Regression (current method)
+2. Word2Vec + Logistic Regression
+3. Count Vectorizer + Naive Bayes (classic baseline)
+4. TF-IDF + Random Forest
+5. TF-IDF + SVM
+"""
+
+import pandas as pd
+import numpy as np
+import re
+from sklearn.model_selection import train_test_split
+from scipy.sparse.linalg import svds
+from scipy.sparse import csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, classification_report, precision_score, recall_score, f1_score
+import time
+try:
+    from gensim.models import Word2Vec
+    from gensim.utils import simple_preprocess
+    GENSIM_AVAILABLE = True
+except ImportError:
+    GENSIM_AVAILABLE = False
+    # We'll use a simplified Word2Vec-like implementation
+    print("Note: Gensim not available. Using simplified Word2Vec-like implementation.")
+    print("(For full Word2Vec, install gensim with C++ build tools)")
+
+import warnings
+warnings.filterwarnings('ignore')
+
+print("="*80)
+print("SPAM CLASSIFIER COMPARISON: Multiple Text Classification Methods")
+print("="*80)
+
+# ============================================================================
+# 1. LOAD DATA
+# ============================================================================
+"""
+DATA SPLITTING EXPLANATION:
+---------------------------
+We split data into training (80%) and test (20%) sets:
+- Training set: Used to teach the model (fit/learn patterns)
+- Test set: Used to evaluate performance (unseen data, like real-world)
+
+stratify=y ensures both sets have the same proportion of spam/ham
+This prevents one set from having all spam and the other all ham.
+
+random_state=42 ensures reproducible splits (same split every time you run)
+"""
+print("\n[1] Loading data...")
+# Load the dataset (CSV file with 'text' and 'label' columns)
+data = pd.read_csv("spam_data.csv")
+
+# Separate features (X) and target (y)
+X = data["text"]   # Input: Email text content
+y = data["label"]  # Output: 'spam' or 'ham' labels
+
+# Split into training (80%) and testing (20%) sets
+# - test_size=0.2: 20% for testing, 80% for training
+# - random_state=42: Seed for reproducibility
+# - stratify=y: Maintain same spam/ham ratio in both sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+print(f"Training set: {len(X_train)} emails")  # Used to train models
+print(f"Test set: {len(X_test)} emails\n")      # Used to evaluate models
+
+# Store results for comparison across all methods
+results = []
+
+# ============================================================================
+# METHOD 1: TF-IDF + Logistic Regression (Current Method)
+# ============================================================================
+"""
+WHAT IS TF-IDF?
+---------------
+TF-IDF (Term Frequency-Inverse Document Frequency) converts text into numbers.
+- TF (Term Frequency): How often a word appears in a document
+- IDF (Inverse Document Frequency): How rare/common a word is across all documents
+- Formula: TF-IDF = TF × IDF
+
+ADVANTAGES:
+-----------
+✓ Excellent for keyword-based tasks (like spam detection)
+✓ Weights important words higher (rare words get more weight)
+✓ Handles high-dimensional sparse data efficiently
+✓ Fast training and prediction
+✓ Interpretable - you can see which words are important
+✓ Works well with small to medium datasets
+
+DISADVANTAGES:
+-------------
+✗ Doesn't understand word meaning/semantics
+✗ Ignores word order (bag-of-words approach)
+✗ Creates sparse vectors (mostly zeros) - memory intensive for large vocabularies
+
+WHEN TO USE:
+-----------
+- Spam detection, topic classification, keyword-based tasks
+- When word presence/absence is more important than meaning
+- When you need fast, interpretable models
+"""
+print("\n" + "="*80)
+print("METHOD 1: TF-IDF + Logistic Regression")
+print("="*80)
+start_time = time.time()
+
+# Initialize TF-IDF vectorizer with parameters:
+# - lowercase=True: Convert all text to lowercase (normalization)
+# - stop_words="english": Remove common words like "the", "a", "an" (they don't help classification)
+# - ngram_range=(1, 2): Use single words (unigrams) AND word pairs (bigrams)
+#   Example: "free money" becomes both "free", "money" AND "free money"
+# - max_df=0.9: Ignore words that appear in >90% of documents (too common, not informative)
+# - min_df=2: Ignore words that appear in <2 documents (too rare, might be typos)
+vectorizer_tfidf = TfidfVectorizer(
+    lowercase=True,
+    stop_words="english",
+    ngram_range=(1, 2),
+    max_df=0.9,
+    min_df=2
+)
+
+# STEP 1: Fit vectorizer on training data (learn vocabulary) and transform to numbers
+# fit_transform() does two things:
+#   1. Learns which words/ngrams are in the vocabulary
+#   2. Converts each email into a vector of TF-IDF scores
+X_train_tfidf = vectorizer_tfidf.fit_transform(X_train)
+
+# STEP 2: Transform test data using the SAME vocabulary (don't refit!)
+# This ensures test data uses the same features as training data
+X_test_tfidf = vectorizer_tfidf.transform(X_test)
+
+# Initialize Logistic Regression classifier
+# - max_iter=1000: Maximum iterations for the algorithm to converge
+# - class_weight="balanced": Automatically adjust weights for imbalanced classes
+#   (if you have more spam than ham, it balances the importance)
+# - random_state=42: For reproducibility (same results every run)
+clf_lr = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)
+
+# Train the classifier: Learn the relationship between TF-IDF features and spam/ham labels
+clf_lr.fit(X_train_tfidf, y_train)
+
+# Make predictions on test data
+y_pred_lr = clf_lr.predict(X_test_tfidf)
+
+# ========================================================================
+# EVALUATION METRICS EXPLANATION:
+# ========================================================================
+# Accuracy: Percentage of correct predictions (both spam and ham)
+#   Formula: (True Positives + True Negatives) / Total
+#   Example: 75% accuracy = 75 out of 100 emails classified correctly
+#
+# Precision: Of all emails predicted as spam, how many were actually spam?
+#   Formula: True Positives / (True Positives + False Positives)
+#   High precision = Few false alarms (fewer legitimate emails marked as spam)
+#   Example: 100% precision = All predicted spam is actually spam (no false positives)
+#
+# Recall: Of all actual spam emails, how many did we catch?
+#   Formula: True Positives / (True Positives + False Negatives)
+#   High recall = Catches most spam (fewer spam emails slip through)
+#   Example: 75% recall = We catch 75% of all spam emails
+#
+# F1-Score: Harmonic mean of precision and recall (balanced metric)
+#   Formula: 2 × (Precision × Recall) / (Precision + Recall)
+#   Combines precision and recall into one number
+#   Good when you want to balance both metrics
+
+# Calculate all evaluation metrics
+accuracy_lr = accuracy_score(y_test, y_pred_lr)
+precision_lr = precision_score(y_test, y_pred_lr, pos_label='spam', average='binary')
+recall_lr = recall_score(y_test, y_pred_lr, pos_label='spam', average='binary')
+f1_lr = f1_score(y_test, y_pred_lr, pos_label='spam', average='binary')
+time_lr = time.time() - start_time
+
+# Display results
+print(f"Accuracy: {accuracy_lr:.4f}")      # Overall correctness
+print(f"Precision: {precision_lr:.4f}")     # Spam predictions accuracy
+print(f"Recall: {recall_lr:.4f}")           # Spam detection rate
+print(f"F1-Score: {f1_lr:.4f}")            # Balanced metric
+print(f"Training Time: {time_lr:.4f} seconds")
+print(f"Feature Dimensions: {X_train_tfidf.shape[1]}")  # Number of features (words/ngrams)
+
+results.append({
+    'Method': 'TF-IDF + Logistic Regression',
+    'Accuracy': accuracy_lr,
+    'Precision': precision_lr,
+    'Recall': recall_lr,
+    'F1-Score': f1_lr,
+    'Time (s)': time_lr,
+    'Features': X_train_tfidf.shape[1]
+})
+
+# ============================================================================
+# METHOD 2: Count Vectorizer + Naive Bayes (Classic Baseline)
+# ============================================================================
+"""
+WHAT IS COUNT VECTORIZER?
+-------------------------
+Count Vectorizer simply counts how many times each word appears in a document.
+Unlike TF-IDF, it doesn't weight words by importance - just raw counts.
+
+ADVANTAGES:
+-----------
+✓ Extremely fast (simpler than TF-IDF)
+✓ Simple and easy to understand
+✓ Works well with Naive Bayes (which assumes feature independence)
+✓ Good baseline for comparison
+✓ Memory efficient
+
+DISADVANTAGES:
+-------------
+✗ Doesn't weight important words (common words get same weight as rare words)
+✗ Less sophisticated than TF-IDF
+✗ May not perform as well on complex tasks
+
+WHEN TO USE:
+-----------
+- Quick baseline experiments
+- When speed is critical
+- Simple text classification tasks
+- When combined with Naive Bayes (they work well together)
+"""
+print("\n" + "="*80)
+print("METHOD 2: Count Vectorizer + Naive Bayes (Classic Baseline)")
+print("="*80)
+start_time = time.time()
+
+# Count Vectorizer: Similar to TF-IDF but simpler - just counts word occurrences
+# Same parameters as TF-IDF for fair comparison
+vectorizer_count = CountVectorizer(
+    lowercase=True,
+    stop_words="english",
+    ngram_range=(1, 2),
+    max_df=0.9,
+    min_df=2
+)
+
+# Convert text to word count vectors (not TF-IDF weighted)
+X_train_count = vectorizer_count.fit_transform(X_train)
+X_test_count = vectorizer_count.transform(X_test)
+
+# Naive Bayes Classifier
+# - "Naive" because it assumes features (words) are independent (not always true, but works well)
+# - Based on Bayes' theorem: P(spam|words) = P(words|spam) × P(spam) / P(words)
+# - Very fast and works well with count-based features
+# - MultinomialNB is used for count data (like word counts)
+clf_nb = MultinomialNB()
+
+# Train: Learn probability distributions of words for spam vs ham
+clf_nb.fit(X_train_count, y_train)
+
+# Predict: Calculate probability of spam given the words in the email
+y_pred_nb = clf_nb.predict(X_test_count)
+
+accuracy_nb = accuracy_score(y_test, y_pred_nb)
+precision_nb = precision_score(y_test, y_pred_nb, pos_label='spam', average='binary')
+recall_nb = recall_score(y_test, y_pred_nb, pos_label='spam', average='binary')
+f1_nb = f1_score(y_test, y_pred_nb, pos_label='spam', average='binary')
+time_nb = time.time() - start_time
+
+print(f"Accuracy: {accuracy_nb:.4f}")
+print(f"Precision: {precision_nb:.4f}")
+print(f"Recall: {recall_nb:.4f}")
+print(f"F1-Score: {f1_nb:.4f}")
+print(f"Training Time: {time_nb:.4f} seconds")
+print(f"Feature Dimensions: {X_train_count.shape[1]}")
+
+results.append({
+    'Method': 'Count Vectorizer + Naive Bayes',
+    'Accuracy': accuracy_nb,
+    'Precision': precision_nb,
+    'Recall': recall_nb,
+    'F1-Score': f1_nb,
+    'Time (s)': time_nb,
+    'Features': X_train_count.shape[1]
+})
+
+# ============================================================================
+# METHOD 3: TF-IDF + Random Forest
+# ============================================================================
+"""
+WHAT IS RANDOM FOREST?
+----------------------
+Random Forest creates many decision trees and combines their predictions.
+Each tree votes, and the majority vote wins.
+
+ADVANTAGES:
+-----------
+✓ Handles non-linear relationships (unlike Logistic Regression)
+✓ Can capture complex patterns in data
+✓ Less prone to overfitting (with many trees)
+✓ Can show feature importance
+✓ Works well with high-dimensional data
+
+DISADVANTAGES:
+-------------
+✗ Slower training than linear models
+✗ Less interpretable (harder to understand why it made a prediction)
+✗ May overfit on small datasets
+✗ Requires more memory
+
+WHEN TO USE:
+-----------
+- When you suspect non-linear relationships
+- Complex classification tasks
+- When you have enough data to prevent overfitting
+- When you need feature importance rankings
+"""
+print("\n" + "="*80)
+print("METHOD 3: TF-IDF + Random Forest")
+print("="*80)
+start_time = time.time()
+
+# Reuse TF-IDF features from Method 1 (no need to recompute)
+# Random Forest Classifier:
+# - n_estimators=100: Create 100 decision trees (more trees = better but slower)
+# - class_weight="balanced": Handle imbalanced classes
+# - random_state=42: Reproducibility
+# - n_jobs=-1: Use all CPU cores for parallel processing (faster)
+clf_rf = RandomForestClassifier(n_estimators=100, class_weight="balanced", random_state=42, n_jobs=-1)
+
+# Train: Build 100 decision trees, each trained on a random subset of data
+clf_rf.fit(X_train_tfidf, y_train)
+
+# Predict: Each tree votes, majority vote is the final prediction
+y_pred_rf = clf_rf.predict(X_test_tfidf)
+
+accuracy_rf = accuracy_score(y_test, y_pred_rf)
+precision_rf = precision_score(y_test, y_pred_rf, pos_label='spam', average='binary')
+recall_rf = recall_score(y_test, y_pred_rf, pos_label='spam', average='binary')
+f1_rf = f1_score(y_test, y_pred_rf, pos_label='spam', average='binary')
+time_rf = time.time() - start_time
+
+print(f"Accuracy: {accuracy_rf:.4f}")
+print(f"Precision: {precision_rf:.4f}")
+print(f"Recall: {recall_rf:.4f}")
+print(f"F1-Score: {f1_rf:.4f}")
+print(f"Training Time: {time_rf:.4f} seconds")
+
+results.append({
+    'Method': 'TF-IDF + Random Forest',
+    'Accuracy': accuracy_rf,
+    'Precision': precision_rf,
+    'Recall': recall_rf,
+    'F1-Score': f1_rf,
+    'Time (s)': time_rf,
+    'Features': X_train_tfidf.shape[1]
+})
+
+# ============================================================================
+# METHOD 4: TF-IDF + SVM (Support Vector Machine)
+# ============================================================================
+"""
+WHAT IS SVM?
+------------
+Support Vector Machine finds the best boundary (hyperplane) that separates
+spam from ham emails with maximum margin.
+
+ADVANTAGES:
+-----------
+✓ Excellent for high-dimensional data (like TF-IDF vectors)
+✓ Effective with sparse features
+✓ Can handle non-linear relationships with different kernels
+✓ Good generalization (works well on unseen data)
+✓ Memory efficient (only stores support vectors)
+
+DISADVANTAGES:
+-------------
+✗ Can be slow with large datasets
+✗ Less interpretable than Logistic Regression
+✗ Requires careful parameter tuning
+✗ Doesn't directly provide probability estimates (needs calibration)
+
+WHEN TO USE:
+-----------
+- High-dimensional sparse data (like text)
+- When you need good generalization
+- Classification tasks with clear separation between classes
+- When you have medium-sized datasets
+"""
+print("\n" + "="*80)
+print("METHOD 4: TF-IDF + SVM (Support Vector Machine)")
+print("="*80)
+start_time = time.time()
+
+# Reuse TF-IDF features from Method 1
+# Support Vector Machine (SVM):
+# - kernel='linear': Use linear kernel (finds a straight line boundary)
+#   Other options: 'rbf' (non-linear), 'poly' (polynomial)
+#   Linear is fast and works well for text classification
+# - class_weight="balanced": Handle imbalanced classes
+# - random_state=42: Reproducibility
+clf_svm = SVC(kernel='linear', class_weight="balanced", random_state=42)
+
+# Train: Find the optimal boundary (hyperplane) that separates spam from ham
+# with maximum margin (distance to nearest data points)
+clf_svm.fit(X_train_tfidf, y_train)
+
+# Predict: Determine which side of the boundary the email falls on
+y_pred_svm = clf_svm.predict(X_test_tfidf)
+
+accuracy_svm = accuracy_score(y_test, y_pred_svm)
+precision_svm = precision_score(y_test, y_pred_svm, pos_label='spam', average='binary')
+recall_svm = recall_score(y_test, y_pred_svm, pos_label='spam', average='binary')
+f1_svm = f1_score(y_test, y_pred_svm, pos_label='spam', average='binary')
+time_svm = time.time() - start_time
+
+print(f"Accuracy: {accuracy_svm:.4f}")
+print(f"Precision: {precision_svm:.4f}")
+print(f"Recall: {recall_svm:.4f}")
+print(f"F1-Score: {f1_svm:.4f}")
+print(f"Training Time: {time_svm:.4f} seconds")
+
+results.append({
+    'Method': 'TF-IDF + SVM',
+    'Accuracy': accuracy_svm,
+    'Precision': precision_svm,
+    'Recall': recall_svm,
+    'F1-Score': f1_svm,
+    'Time (s)': time_svm,
+    'Features': X_train_tfidf.shape[1]
+})
+
+# ============================================================================
+# METHOD 5: Word2Vec + Logistic Regression
+# ============================================================================
+"""
+WHAT IS WORD2VEC?
+-----------------
+Word2Vec creates dense vector representations (embeddings) for words based on
+their context. Words that appear in similar contexts get similar vectors.
+
+HOW IT WORKS:
+------------
+1. Looks at words in context windows (surrounding words)
+2. Learns that words appearing near each other are related
+3. Creates dense vectors (e.g., 100 dimensions) where each dimension
+   represents a learned feature about the word
+4. Example: "king" and "queen" will have similar vectors
+
+ADVANTAGES:
+-----------
+✓ Captures semantic relationships (understands word meaning)
+✓ Understands synonyms and related concepts
+✓ Dense vectors (more efficient than sparse TF-IDF)
+✓ Better for understanding context and meaning
+✓ Can find similar words/documents
+
+DISADVANTAGES:
+-------------
+✗ Requires more data to train effectively
+✗ Slower training (needs to learn word relationships)
+✗ May not be better for keyword-based tasks (like spam)
+✗ More complex setup
+✗ Less interpretable (hard to explain why a word has certain values)
+
+WHEN TO USE:
+-----------
+- Semantic understanding tasks (sentiment analysis, document similarity)
+- When word meaning matters more than keyword presence
+- Large datasets with rich context
+- Finding similar documents or words
+- NOT ideal for spam detection (which is keyword-based)
+
+CO-OCCURRENCE APPROACH (Simplified Word2Vec):
+--------------------------------------------
+Since full Word2Vec requires gensim (needs C++), we use a simplified version:
+1. Build co-occurrence matrix (count how often words appear together)
+2. Use SVD (Singular Value Decomposition) to reduce dimensions
+3. This captures word relationships similar to Word2Vec
+"""
+print("\n" + "="*80)
+print("METHOD 5: Word2Vec + Logistic Regression")
+print("="*80)
+start_time = time.time()
+
+if GENSIM_AVAILABLE:
+    # Full Word2Vec implementation using gensim library
+    print("\n" + "="*80)
+    print("METHOD 5: Word2Vec + Logistic Regression")
+    print("="*80)
+    start_time = time.time()
+
+    # STEP 1: Preprocess text - convert to lowercase and split into words
+    # simple_preprocess handles tokenization and normalization
+    def preprocess_text(text):
+        return simple_preprocess(str(text), deacc=True)  # deacc=True removes accents
+
+    # Tokenize all emails into lists of words
+    train_tokens = [preprocess_text(text) for text in X_train]
+    test_tokens = [preprocess_text(text) for text in X_test]
+
+    # STEP 2: Train Word2Vec model
+    # Word2Vec learns word embeddings by looking at word context
+    print("Training Word2Vec model...")
+    # Handle both old and new gensim API versions
+    try:
+        # New API (gensim 4.0+)
+        w2v_model = Word2Vec(
+            sentences=train_tokens,      # List of tokenized sentences
+            vector_size=100,              # Dimension of word vectors (100 features per word)
+            window=5,                     # Context window: look at 5 words before and after
+            min_count=1,                  # Minimum word frequency (include all words)
+            workers=4,                    # Number of CPU threads for parallel processing
+            sg=0                          # 0 = CBOW (Continuous Bag of Words), 1 = Skip-gram
+                                          # CBOW: predict word from context (faster)
+                                          # Skip-gram: predict context from word (better for rare words)
+        )
+        vector_size = 100
+        use_wv = True
+    except TypeError:
+        # Old API (gensim < 4.0) - uses 'size' instead of 'vector_size'
+        w2v_model = Word2Vec(
+            sentences=train_tokens,
+            size=100,                     # Old parameter name
+            window=5,
+            min_count=1,
+            workers=4,
+            sg=0
+        )
+        vector_size = 100
+        use_wv = False
+
+    # STEP 3: Convert documents to vectors
+    # Since Word2Vec creates vectors for words, we need to combine them for documents
+    # Common approach: Average all word vectors in the document
+    def get_document_vector(tokens, model, use_wv_accessor=True):
+        """
+        Convert a document (list of words) into a single vector.
+        Strategy: Average all word vectors in the document.
+        """
+        vectors = []
+        for token in tokens:
+            try:
+                if use_wv_accessor:
+                    # New API: access word vectors via model.wv[word]
+                    if token in model.wv:
+                        vectors.append(model.wv[token])
+                else:
+                    # Old API: access word vectors via model[word]
+                    if token in model:
+                        vectors.append(model[token])
+            except:
+                continue
+        if len(vectors) > 0:
+            # Average all word vectors to get document vector
+            return np.mean(vectors, axis=0)
+        else:
+            # If no words found, return zero vector
+            return np.zeros(vector_size)
+
+    # Convert all emails to document vectors
+    print("Converting documents to vectors...")
+    X_train_w2v = np.array([get_document_vector(tokens, w2v_model, use_wv) for tokens in train_tokens])
+    X_test_w2v = np.array([get_document_vector(tokens, w2v_model, use_wv) for tokens in test_tokens])
+
+    # Train classifier
+    clf_w2v = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)
+    clf_w2v.fit(X_train_w2v, y_train)
+    y_pred_w2v = clf_w2v.predict(X_test_w2v)
+
+    accuracy_w2v = accuracy_score(y_test, y_pred_w2v)
+    precision_w2v = precision_score(y_test, y_pred_w2v, pos_label='spam', average='binary')
+    recall_w2v = recall_score(y_test, y_pred_w2v, pos_label='spam', average='binary')
+    f1_w2v = f1_score(y_test, y_pred_w2v, pos_label='spam', average='binary')
+    time_w2v = time.time() - start_time
+
+    print(f"Accuracy: {accuracy_w2v:.4f}")
+    print(f"Precision: {precision_w2v:.4f}")
+    print(f"Recall: {recall_w2v:.4f}")
+    print(f"F1-Score: {f1_w2v:.4f}")
+    print(f"Training Time: {time_w2v:.4f} seconds")
+    print(f"Feature Dimensions: {X_train_w2v.shape[1]}")
+
+    results.append({
+        'Method': 'Word2Vec + Logistic Regression (Gensim)',
+        'Accuracy': accuracy_w2v,
+        'Precision': precision_w2v,
+        'Recall': recall_w2v,
+        'F1-Score': f1_w2v,
+        'Time (s)': time_w2v,
+        'Features': X_train_w2v.shape[1]
+    })
+else:
+    # ========================================================================
+    # SIMPLIFIED WORD2VEC IMPLEMENTATION (No gensim required)
+    # ========================================================================
+    # Since gensim requires C++ build tools, we implement a simplified version
+    # using co-occurrence matrix and SVD (Singular Value Decomposition)
+    # This captures word relationships similar to Word2Vec
+    print("Using simplified Word2Vec-like implementation (co-occurrence based)...")
+    
+    # STEP 1: Simple text preprocessing
+    # Convert to lowercase and extract words (remove punctuation)
+    def simple_tokenize(text):
+        text = str(text).lower()
+        # \b\w+\b matches word boundaries (whole words only)
+        words = re.findall(r'\b\w+\b', text)
+        return words
+    
+    # Tokenize all emails into lists of words
+    train_tokens = [simple_tokenize(text) for text in X_train]
+    test_tokens = [simple_tokenize(text) for text in X_test]
+    
+    # STEP 2: Build vocabulary (dictionary of all unique words)
+    # Create a mapping: word -> index number
+    all_words = set()
+    for tokens in train_tokens:
+        all_words.update(tokens)  # Add all words from training data
+    word_to_idx = {word: idx for idx, word in enumerate(sorted(all_words))}
+    vocab_size = len(word_to_idx)
+    
+    # STEP 3: Build co-occurrence matrix
+    # This matrix counts how often words appear together in context windows
+    # Example: If "free" and "money" appear together often, they're related
+    window_size = 5      # Look at 5 words before and after
+    vector_size = 100    # Final embedding dimension
+    
+    print(f"Building word embeddings from co-occurrence matrix (vocab: {vocab_size} words)...")
+    
+    # Initialize co-occurrence matrix (vocab_size × vocab_size)
+    # Each cell [i, j] counts how often word i appears near word j
+    cooccurrence = np.zeros((vocab_size, vocab_size))
+    
+    # Count co-occurrences: for each word, count nearby words
+    for tokens in train_tokens:
+        for i, word in enumerate(tokens):
+            if word in word_to_idx:
+                word_idx = word_to_idx[word]
+                # Look at context window (words before and after)
+                start = max(0, i - window_size)
+                end = min(len(tokens), i + window_size + 1)
+                for j in range(start, end):
+                    if j != i and tokens[j] in word_to_idx:
+                        context_idx = word_to_idx[tokens[j]]
+                        # Increment co-occurrence count
+                        cooccurrence[word_idx, context_idx] += 1
+    
+    # STEP 4: Reduce dimensions using SVD (Singular Value Decomposition)
+    # SVD finds the most important patterns in the co-occurrence matrix
+    # This is similar to how Word2Vec learns word embeddings
+    print("Reducing dimensions using SVD...")
+    # svds: Sparse SVD (efficient for large matrices)
+    # k: Number of dimensions to keep (100 in our case)
+    U, s, Vt = svds(csr_matrix(cooccurrence), k=min(vector_size, vocab_size-1))
+    # U contains the word embeddings (each row is a word vector)
+    word_vectors = U
+    
+    # STEP 5: Convert documents to vectors
+    # Average all word vectors in a document to get document vector
+    def get_doc_vector(tokens, word_vectors, word_to_idx):
+        """
+        Convert a document into a vector by averaging its word vectors.
+        This is the same approach as the full Word2Vec implementation.
+        """
+        vectors = []
+        for token in tokens:
+            if token in word_to_idx:
+                idx = word_to_idx[token]
+                vectors.append(word_vectors[idx])  # Get word's embedding
+        if len(vectors) > 0:
+            return np.mean(vectors, axis=0)  # Average all word vectors
+        else:
+            return np.zeros(word_vectors.shape[1])  # Zero vector if no words found
+    
+    # Convert all emails to document vectors
+    print("Converting documents to vectors...")
+    X_train_w2v = np.array([get_doc_vector(tokens, word_vectors, word_to_idx) for tokens in train_tokens])
+    X_test_w2v = np.array([get_doc_vector(tokens, word_vectors, word_to_idx) for tokens in test_tokens])
+    
+    # Train classifier
+    clf_w2v = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)
+    clf_w2v.fit(X_train_w2v, y_train)
+    y_pred_w2v = clf_w2v.predict(X_test_w2v)
+    
+    accuracy_w2v = accuracy_score(y_test, y_pred_w2v)
+    precision_w2v = precision_score(y_test, y_pred_w2v, pos_label='spam', average='binary')
+    recall_w2v = recall_score(y_test, y_pred_w2v, pos_label='spam', average='binary')
+    f1_w2v = f1_score(y_test, y_pred_w2v, pos_label='spam', average='binary')
+    time_w2v = time.time() - start_time
+    
+    print(f"Accuracy: {accuracy_w2v:.4f}")
+    print(f"Precision: {precision_w2v:.4f}")
+    print(f"Recall: {recall_w2v:.4f}")
+    print(f"F1-Score: {f1_w2v:.4f}")
+    print(f"Training Time: {time_w2v:.4f} seconds")
+    print(f"Feature Dimensions: {X_train_w2v.shape[1]}")
+    
+    results.append({
+        'Method': 'Word2Vec-like (Co-occurrence) + LR',
+        'Accuracy': accuracy_w2v,
+        'Precision': precision_w2v,
+        'Recall': recall_w2v,
+        'F1-Score': f1_w2v,
+        'Time (s)': time_w2v,
+        'Features': X_train_w2v.shape[1]
+    })
+
+# ============================================================================
+# COMPARISON SUMMARY
+# ============================================================================
+print("\n" + "="*80)
+print("COMPARISON SUMMARY")
+print("="*80)
+
+results_df = pd.DataFrame(results)
+results_df = results_df.sort_values('Accuracy', ascending=False)
+
+print("\n" + results_df.to_string(index=False))
+
+print("\n" + "="*80)
+print("KEY INSIGHTS")
+print("="*80)
+print(f"""
+1. BEST ACCURACY: {results_df.iloc[0]['Method']} ({results_df.iloc[0]['Accuracy']:.4f})
+2. FASTEST TRAINING: {results_df.loc[results_df['Time (s)'].idxmin(), 'Method']} ({results_df['Time (s)'].min():.4f}s)
+3. HIGHEST F1-SCORE: {results_df.loc[results_df['F1-Score'].idxmax(), 'Method']} ({results_df['F1-Score'].max():.4f})
+
+METHOD COMPARISONS:
+------------------
+TF-IDF vs Count Vectorizer:
+  - TF-IDF weights words by importance (better for distinguishing documents)
+  - Count Vectorizer uses raw word frequencies (simpler, faster)
+
+Word2Vec vs TF-IDF:
+  - Word2Vec captures semantic relationships between words
+  - TF-IDF captures word importance in documents
+  - Word2Vec creates dense vectors (100-300 dims) vs sparse TF-IDF (thousands of dims)
+  - Word2Vec better for semantic similarity, TF-IDF better for keyword-based tasks
+
+Classifier Comparison:
+  - Logistic Regression: Fast, interpretable, good baseline
+  - Naive Bayes: Very fast, works well with sparse features
+  - Random Forest: Handles non-linear relationships, more complex
+  - SVM: Good for high-dimensional data, can be slower
+""")
+
+print("="*80)
+
